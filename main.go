@@ -9,12 +9,13 @@ import (
 	kubeinformers "k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
+
 	// Uncomment the following line to load the gcp plugin (only required to authenticate against GKE clusters).
 	// _ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 
-	clientset "github.com/nikhita/custom-database-controller/pkg/client/clientset/versioned"
-	informers "github.com/nikhita/custom-database-controller/pkg/client/informers/externalversions"
-	"github.com/nikhita/custom-database-controller/pkg/signals"
+	clientset "github.com/danielfoehrkn/custom-database-controller/pkg/client/clientset/versioned"
+	informers "github.com/danielfoehrkn/custom-database-controller/pkg/client/informers/externalversions"
+	"github.com/danielfoehrkn/custom-database-controller/pkg/signals"
 )
 
 var (
@@ -24,6 +25,10 @@ var (
 
 func main() {
 	flag.Parse()
+
+	//glog -> set logging level
+	flag.Set("logtostderr", "true")
+	flag.Set("stderrthreshold", "INFO")
 
 	// set up signals so we handle the first shutdown signal gracefully
 	stopCh := signals.SetupSignalHandler()
@@ -51,7 +56,7 @@ func main() {
 	go kubeInformerFactory.Start(stopCh)
 	go exampleInformerFactory.Start(stopCh)
 
-	if err = controller.Run(2, stopCh); err != nil {
+	if err = controller.Run(1, stopCh); err != nil {
 		glog.Fatalf("Error running controller: %s", err.Error())
 	}
 }

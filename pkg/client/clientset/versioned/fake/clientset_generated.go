@@ -19,9 +19,9 @@ limitations under the License.
 package fake
 
 import (
-	clientset "github.com/nikhita/custom-database-controller/pkg/client/clientset/versioned"
-	examplev1 "github.com/nikhita/custom-database-controller/pkg/client/clientset/versioned/typed/example.com/v1"
-	fakeexamplev1 "github.com/nikhita/custom-database-controller/pkg/client/clientset/versioned/typed/example.com/v1/fake"
+	clientset "github.com/danielfoehrkn/custom-database-controller/pkg/client/clientset/versioned"
+	danielfoehrknv1 "github.com/danielfoehrkn/custom-database-controller/pkg/client/clientset/versioned/typed/danielfoehrkn.com/v1"
+	fakedanielfoehrknv1 "github.com/danielfoehrkn/custom-database-controller/pkg/client/clientset/versioned/typed/danielfoehrkn.com/v1/fake"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/discovery"
@@ -41,9 +41,10 @@ func NewSimpleClientset(objects ...runtime.Object) *Clientset {
 		}
 	}
 
-	fakePtr := testing.Fake{}
-	fakePtr.AddReactor("*", "*", testing.ObjectReaction(o))
-	fakePtr.AddWatchReactor("*", func(action testing.Action) (handled bool, ret watch.Interface, err error) {
+	cs := &Clientset{}
+	cs.discovery = &fakediscovery.FakeDiscovery{Fake: &cs.Fake}
+	cs.AddReactor("*", "*", testing.ObjectReaction(o))
+	cs.AddWatchReactor("*", func(action testing.Action) (handled bool, ret watch.Interface, err error) {
 		gvr := action.GetResource()
 		ns := action.GetNamespace()
 		watch, err := o.Watch(gvr, ns)
@@ -53,7 +54,7 @@ func NewSimpleClientset(objects ...runtime.Object) *Clientset {
 		return true, watch, nil
 	})
 
-	return &Clientset{fakePtr, &fakediscovery.FakeDiscovery{Fake: &fakePtr}}
+	return cs
 }
 
 // Clientset implements clientset.Interface. Meant to be embedded into a
@@ -70,12 +71,12 @@ func (c *Clientset) Discovery() discovery.DiscoveryInterface {
 
 var _ clientset.Interface = &Clientset{}
 
-// ExampleV1 retrieves the ExampleV1Client
-func (c *Clientset) ExampleV1() examplev1.ExampleV1Interface {
-	return &fakeexamplev1.FakeExampleV1{Fake: &c.Fake}
+// DanielfoehrknV1 retrieves the DanielfoehrknV1Client
+func (c *Clientset) DanielfoehrknV1() danielfoehrknv1.DanielfoehrknV1Interface {
+	return &fakedanielfoehrknv1.FakeDanielfoehrknV1{Fake: &c.Fake}
 }
 
-// Example retrieves the ExampleV1Client
-func (c *Clientset) Example() examplev1.ExampleV1Interface {
-	return &fakeexamplev1.FakeExampleV1{Fake: &c.Fake}
+// Danielfoehrkn retrieves the DanielfoehrknV1Client
+func (c *Clientset) Danielfoehrkn() danielfoehrknv1.DanielfoehrknV1Interface {
+	return &fakedanielfoehrknv1.FakeDanielfoehrknV1{Fake: &c.Fake}
 }

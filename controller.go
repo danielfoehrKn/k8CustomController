@@ -6,11 +6,8 @@ import (
 
 	"github.com/golang/glog"
 
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	kubeinformers "k8s.io/client-go/informers"
@@ -22,14 +19,18 @@ import (
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 
-	examplev1 "github.com/nikhita/custom-database-controller/pkg/apis/example.com/v1"
-	clientset "github.com/nikhita/custom-database-controller/pkg/client/clientset/versioned"
-	samplescheme "github.com/nikhita/custom-database-controller/pkg/client/clientset/versioned/scheme"
-	informers "github.com/nikhita/custom-database-controller/pkg/client/informers/externalversions"
-	listers "github.com/nikhita/custom-database-controller/pkg/client/listers/example.com/v1"
+	//has stuff e.g structs needed for the definiton of the FooType (all obligatory fields in go)
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	clientset "github.com/danielfoehrkn/custom-database-controller/pkg/client/clientset/versioned"
+	samplescheme "github.com/danielfoehrkn/custom-database-controller/pkg/client/clientset/versioned/scheme"
+	informers "github.com/danielfoehrkn/custom-database-controller/pkg/client/informers/externalversions"
+	listers "github.com/danielfoehrkn/custom-database-controller/pkg/client/listers/danielfoehrkn.com/v1"
+
+	danielfoehrknApiV1 "github.com/danielfoehrkn/custom-database-controller/pkg/apis/danielfoehrkn.com/v1"
 )
 
-const controllerAgentName = "mysql-controller"
+const controllerAgentName = "tagger-controller"
 
 const (
 	// SuccessSynced is used as part of the Event 'reason' when a Database is synced
@@ -40,10 +41,10 @@ const (
 
 	// MessageResourceExists is the message used for Events when a resource
 	// fails to sync due to a Deployment already existing
-	MessageResourceExists = "Resource %q already exists and is not managed by Database"
+	MessageResourceExists = "Resource %q already exists and is not managed by TAGGER"
 	// MessageResourceSynced is the message used for an Event fired when a Database
 	// is synced successfully
-	MessageResourceSynced = "Database synced successfully"
+	MessageResourceSynced = "Tagger synced successfully"
 )
 
 // Controller is the controller implementation for Database resources
@@ -51,12 +52,12 @@ type Controller struct {
 	// kubeclientset is a standard kubernetes clientset
 	kubeclientset kubernetes.Interface
 	// exampleclientset is a clientset for our own API group
-	exampleclientset clientset.Interface
+	danielfoehrknclientset clientset.Interface
 
 	deploymentsLister appslisters.DeploymentLister
 	deploymentsSynced cache.InformerSynced
-	databaseLister    listers.DatabaseLister
-	databaseSynced    cache.InformerSynced
+	taggerLister      listers.TaggerLister
+	taggerSynced      cache.InformerSynced
 
 	// workqueue is a rate limited work queue. This is used to queue work to be
 	// processed instead of performing it as soon as a change happens. This
@@ -72,14 +73,14 @@ type Controller struct {
 // NewController returns a new sample controller
 func NewController(
 	kubeclientset kubernetes.Interface,
-	exampleclientset clientset.Interface,
+	danielfoehrknclientset clientset.Interface,
 	kubeInformerFactory kubeinformers.SharedInformerFactory,
 	exampleInformerFactory informers.SharedInformerFactory) *Controller {
 
 	// obtain references to shared index informers for the Deployment and Database
 	// types.
 	deploymentInformer := kubeInformerFactory.Apps().V1().Deployments()
-	databaseInformer := exampleInformerFactory.Example().V1().Databases()
+	taggerInformer := exampleInformerFactory.Danielfoehrkn().V1().Taggers()
 
 	// Create event broadcaster
 	// Add example database types to the default Kubernetes Scheme so Events can be
@@ -92,43 +93,33 @@ func NewController(
 	recorder := eventBroadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: controllerAgentName})
 
 	controller := &Controller{
-		kubeclientset:     kubeclientset,
-		exampleclientset:  exampleclientset,
-		deploymentsLister: deploymentInformer.Lister(),
-		deploymentsSynced: deploymentInformer.Informer().HasSynced,
-		databaseLister:    databaseInformer.Lister(),
-		databaseSynced:    databaseInformer.Informer().HasSynced,
-		workqueue:         workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), ""),
-		recorder:          recorder,
+		kubeclientset:          kubeclientset,
+		danielfoehrknclientset: danielfoehrknclientset,
+		deploymentsLister:      deploymentInformer.Lister(),
+		deploymentsSynced:      deploymentInformer.Informer().HasSynced,
+		taggerLister:           taggerInformer.Lister(),
+		taggerSynced:           taggerInformer.Informer().HasSynced,
+		workqueue:              workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), ""),
+		recorder:               recorder,
 	}
 
 	glog.Info("Setting up event handlers")
-	// Set up an event handler for when Database resources change
-	databaseInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: controller.enqueueDataBase,
+	// Set up an event handler for when Tagger resources change
+	taggerInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: controller.enqueueTagger,
 		UpdateFunc: func(old, new interface{}) {
-			controller.enqueueDataBase(new)
-		},
-	})
-	// Set up an event handler for when Deployment resources change. This
-	// handler will lookup the owner of the given Deployment, and if it is
-	// owned by a Database resource will enqueue that Database resource for
-	// processing. This way, we don't need to implement custom logic for
-	// handling Deployment resources. More info on this pattern:
-	// https://github.com/kubernetes/community/blob/8cafef897a22026d42f5e5bb3f104febe7e29830/contributors/devel/controllers.md
-	deploymentInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: controller.handleObject,
-		UpdateFunc: func(old, new interface{}) {
-			newDepl := new.(*appsv1.Deployment)
-			oldDepl := old.(*appsv1.Deployment)
-			if newDepl.ResourceVersion == oldDepl.ResourceVersion {
+			newTagger := new.(*danielfoehrknApiV1.Tagger)
+			oldTagger := old.(*danielfoehrknApiV1.Tagger)
+			if newTagger.ResourceVersion == oldTagger.ResourceVersion {
 				// Periodic resync will send update events for all known Deployments.
 				// Two different versions of the same Deployment will always have different RVs.
+
+				//TODO: why is this event being called ALL THE TIME so that I need to make a diff on the resource version from etcd? -> etcd watch should only give updates once the key changed
+				glog.Info("EVENT FOR UNCHANGED TAGGER RECEIVED")
 				return
 			}
-			controller.handleObject(new)
+			controller.enqueueTagger(new)
 		},
-		DeleteFunc: controller.handleObject,
 	})
 
 	return controller
@@ -143,16 +134,16 @@ func (c *Controller) Run(threadiness int, stopCh <-chan struct{}) error {
 	defer c.workqueue.ShutDown()
 
 	// Start the informer factories to begin populating the informer caches
-	glog.Info("Starting Database controller")
+	glog.Info("Starting Tagger controller")
 
 	// Wait for the caches to be synced before starting workers
 	glog.Info("Waiting for informer caches to sync")
-	if ok := cache.WaitForCacheSync(stopCh, c.deploymentsSynced, c.databaseSynced); !ok {
+	if ok := cache.WaitForCacheSync(stopCh, c.deploymentsSynced, c.taggerSynced); !ok {
 		return fmt.Errorf("failed to wait for caches to sync")
 	}
 
 	glog.Info("Starting workers")
-	// Launch two workers to process Database resources
+	// Launch two workers to process Tagger resources
 	for i := 0; i < threadiness; i++ {
 		go wait.Until(c.runWorker, time.Second, stopCh)
 	}
@@ -202,11 +193,11 @@ func (c *Controller) processNextWorkItem() bool {
 			// Forget here else we'd go into a loop of attempting to
 			// process a work item that is invalid.
 			c.workqueue.Forget(obj)
-			runtime.HandleError(fmt.Errorf("expected string in workqueue but got %#v", obj))
+			runtime.HandleError(fmt.Errorf("expected string (format: nampesace/name) in workqueue but got %#v", obj))
 			return nil
 		}
 		// Run the syncHandler, passing it the namespace/name string of the
-		// Database resource to be synced.
+		// Tagger resource to be synced.
 		if err := c.syncHandler(key); err != nil {
 			return fmt.Errorf("error syncing '%s': %s", key, err.Error())
 		}
@@ -236,185 +227,91 @@ func (c *Controller) syncHandler(key string) error {
 		return nil
 	}
 
-	// Get the Database resource with this namespace/name
-	database, err := c.databaseLister.Databases(namespace).Get(name)
+	// Get the Tagger resource with this namespace/name
+
+	tagger, err := c.taggerLister.Taggers(namespace).Get(name)
 	if err != nil {
-		// The Database resource may no longer exist, in which case we stop
+		// The tagger resource may no longer exist, in which case we stop
 		// processing.
 		if errors.IsNotFound(err) {
-			runtime.HandleError(fmt.Errorf("database '%s' in work queue no longer exists", key))
+			runtime.HandleError(fmt.Errorf("tagger '%s' in work queue no longer exists", key))
 			return nil
 		}
 
 		return err
 	}
 
-	deploymentName := database.Spec.User
-	if deploymentName == "" {
+	glog.Infof("Tagger resource retrieved %s:%s", tagger.Namespace, tagger.Name)
+
+	//check if needed fields in the tagger APi Object have been specified by the user
+
+	apiObjectLabel := tagger.Spec.Label
+	apiObjectKey := tagger.Spec.Key
+	if apiObjectLabel == "" || apiObjectKey == "" {
 		// We choose to absorb the error here as the worker would requeue the
 		// resource otherwise. Instead, the next time the resource is updated
 		// the resource will be queued again.
-		runtime.HandleError(fmt.Errorf("%s: deployment name must be specified", key))
+		runtime.HandleError(fmt.Errorf("%s: label and key must be specified", apiObjectLabel))
 		return nil
 	}
 
-	// Get the deployment with the name specified in Database.spec
-	deployment, err := c.deploymentsLister.Deployments(database.Namespace).Get(deploymentName)
-	// If the resource doesn't exist, we'll create it
-	if errors.IsNotFound(err) {
-		deployment, err = c.kubeclientset.AppsV1().Deployments(database.Namespace).Create(newDeployment(database))
-	}
+	//tag the pods with that label
+	options := v1.ListOptions{}
 
-	// If an error occurs during Get/Create, we'll requeue the item so we can
-	// attempt processing again later. This could have been caused by a
-	// temporary network failure, or any other transient reason.
+	podList, err := c.kubeclientset.Core().Pods(tagger.Namespace).List(options)
+
 	if err != nil {
+		glog.Infof("Pod listing failed %s", err.Error)
 		return err
 	}
 
-	// If the Deployment is not controlled by this Database resource, we should log
-	// a warning to the event recorder and ret
-	if !metav1.IsControlledBy(deployment, database) {
-		msg := fmt.Sprintf(MessageResourceExists, deployment.Name)
-		c.recorder.Event(database, corev1.EventTypeWarning, ErrResourceExists, msg)
-		return fmt.Errorf(msg)
+	glog.Infof("Pods retrieved: %d", len(podList.Items))
+
+	for _, pod := range podList.Items {
+		//tag it
+		podCopy := pod.DeepCopy()
+
+		if _, ok := podCopy.Labels[apiObjectKey]; !ok {
+			glog.Infof("The Pod %s does not have the tag %s yet", pod.Name, apiObjectKey)
+
+			//Add label
+			labelMap := make(map[string]string)
+
+			//use label from user-created tagger Object
+			labelMap[apiObjectKey] = apiObjectLabel
+
+			for index, tag := range labelMap {
+				podCopy.Labels[index] = tag
+			}
+
+			//tag it
+			_, err := c.kubeclientset.Core().Pods(tagger.Namespace).Update(podCopy)
+			// If an error occurs during Get/Create, we'll requeue the item so we can
+			// attempt processing again later. This could have been caused by a
+			// temporary network failure, or any other transient reason.
+			if err != nil {
+				glog.Infof("Tagging of Pod %s failed", podCopy.Name)
+				return err
+			}
+			glog.Infof("Tagging of Pod %s successful", podCopy.Name)
+		}
+
 	}
 
-	// If this number of the replicas on the Database resource is specified, and the
-	// number does not equal the current desired replicas on the Deployment, we
-	// should update the Deployment resource.
-	if database.Spec.Replicas != nil && *database.Spec.Replicas != *deployment.Spec.Replicas {
-		glog.V(4).Infof("Database %s replicas: %d, deployment replicas: %d", name, *database.Spec.Replicas, *deployment.Spec.Replicas)
-		deployment, err = c.kubeclientset.AppsV1().Deployments(database.Namespace).Update(newDeployment(database))
-	}
-
-	// If an error occurs during Update, we'll requeue the item so we can
-	// attempt processing again later. THis could have been caused by a
-	// temporary network failure, or any other transient reason.
-	if err != nil {
-		return err
-	}
-
-	// Finally, we update the status block of the Database resource to reflect the
-	// current state of the world
-	err = c.updateDatabaseStatus(database, deployment)
-	if err != nil {
-		return err
-	}
-
-	c.recorder.Event(database, corev1.EventTypeNormal, SuccessSynced, MessageResourceSynced)
+	c.recorder.Event(tagger, corev1.EventTypeNormal, SuccessSynced, MessageResourceSynced)
 	return nil
 }
 
-func (c *Controller) updateDatabaseStatus(database *examplev1.Database, deployment *appsv1.Deployment) error {
-	// NEVER modify objects from the store. It's a read-only, local cache.
-	// You can use DeepCopy() to make a deep copy of original object and modify this copy
-	// Or create a copy manually for better performance
-	databaseCopy := database.DeepCopy()
-	databaseCopy.Status.AvailableReplicas = deployment.Status.AvailableReplicas
-	// UpdateStatus will not allow changes to the Spec of the resource, which is ideal for ensuring
-	// nothing other than resource status has been updated.
-	_, err := c.exampleclientset.ExampleV1().Databases(database.Namespace).UpdateStatus(databaseCopy)
-	return err
-}
-
-// enqueueDataBase takes a Database resource and converts it into a namespace/name
+// enqueueTagger takes a Tagger resource and converts it into a namespace/name
 // string which is then put onto the work queue. This method should *not* be
 // passed resources of any type other than Database.
-func (c *Controller) enqueueDataBase(obj interface{}) {
+func (c *Controller) enqueueTagger(obj interface{}) {
 	var key string
 	var err error
 	if key, err = cache.MetaNamespaceKeyFunc(obj); err != nil {
 		runtime.HandleError(err)
 		return
 	}
+	glog.Infof("Enqueueing tagger  %s", key)
 	c.workqueue.AddRateLimited(key)
-}
-
-// handleObject will take any resource implementing metav1.Object and attempt
-// to find the Database resource that 'owns' it. It does this by looking at the
-// objects metadata.ownerReferences field for an appropriate OwnerReference.
-// It then enqueues that Database resource to be processed. If the object does not
-// have an appropriate OwnerReference, it will simply be skipped.
-func (c *Controller) handleObject(obj interface{}) {
-	var object metav1.Object
-	var ok bool
-	if object, ok = obj.(metav1.Object); !ok {
-		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
-		if !ok {
-			runtime.HandleError(fmt.Errorf("error decoding object, invalid type"))
-			return
-		}
-		object, ok = tombstone.Obj.(metav1.Object)
-		if !ok {
-			runtime.HandleError(fmt.Errorf("error decoding object tombstone, invalid type"))
-			return
-		}
-		glog.V(4).Infof("Recovered deleted object '%s' from tombstone", object.GetName())
-	}
-	glog.V(4).Infof("Processing object: %s", object.GetName())
-	if ownerRef := metav1.GetControllerOf(object); ownerRef != nil {
-		// If this object is not owned by a Database, we should not do anything more
-		// with it.
-		if ownerRef.Kind != "Database" {
-			return
-		}
-
-		database, err := c.databaseLister.Databases(object.GetNamespace()).Get(ownerRef.Name)
-		if err != nil {
-			glog.V(4).Infof("ignoring orphaned object '%s' of database '%s'", object.GetSelfLink(), ownerRef.Name)
-			return
-		}
-
-		c.enqueueDataBase(database)
-		return
-	}
-}
-
-// newDeployment creates a new Deployment for a Database resource. It also sets
-// the appropriate OwnerReferences on the resource so handleObject can discover
-// the Database resource that 'owns' it.
-func newDeployment(database *examplev1.Database) *appsv1.Deployment {
-	labels := map[string]string{
-		"app":        "mysql",
-		"controller": database.Name,
-	}
-	return &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      database.Spec.User,
-			Namespace: database.Namespace,
-			OwnerReferences: []metav1.OwnerReference{
-				*metav1.NewControllerRef(database, schema.GroupVersionKind{
-					Group:   examplev1.SchemeGroupVersion.Group,
-					Version: examplev1.SchemeGroupVersion.Version,
-					Kind:    "Database",
-				}),
-			},
-		},
-		Spec: appsv1.DeploymentSpec{
-			Replicas: database.Spec.Replicas,
-			Selector: &metav1.LabelSelector{
-				MatchLabels: labels,
-			},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: labels,
-				},
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{
-						{
-							Name:  "mysql",
-							Image: "mysql:5.6",
-							Env: []corev1.EnvVar{
-								{
-									Name:  "MYSQL_ROOT_PASSWORD",
-									Value: database.Spec.Password,
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
 }

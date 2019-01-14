@@ -11,7 +11,7 @@ This follows the same pattern as that of the Kuberentes [sample-controller](http
 
 ```
 export GOPATH=~/go
-go get github.com/nikhita/custom-database-controller
+go get github.com/danielfoehrkn/custom-database-controller
 ```
 
 ## Prerequisites

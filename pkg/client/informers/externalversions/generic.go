@@ -21,7 +21,7 @@ package externalversions
 import (
 	"fmt"
 
-	v1 "github.com/nikhita/custom-database-controller/pkg/apis/example.com/v1"
+	v1 "github.com/danielfoehrkn/custom-database-controller/pkg/apis/danielfoehrkn.com/v1"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
 	cache "k8s.io/client-go/tools/cache"
 )
@@ -52,9 +52,11 @@ func (f *genericInformer) Lister() cache.GenericLister {
 // TODO extend this to unknown resources with a client pool
 func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource) (GenericInformer, error) {
 	switch resource {
-	// Group=example.com, Version=v1
+	// Group=danielfoehrkn.com, Version=v1
 	case v1.SchemeGroupVersion.WithResource("databases"):
-		return &genericInformer{resource: resource.GroupResource(), informer: f.Example().V1().Databases().Informer()}, nil
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Danielfoehrkn().V1().Databases().Informer()}, nil
+	case v1.SchemeGroupVersion.WithResource("taggers"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Danielfoehrkn().V1().Taggers().Informer()}, nil
 
 	}
 

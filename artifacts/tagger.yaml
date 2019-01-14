@@ -1,0 +1,9 @@
+apiVersion: danielfoehrkn.com/v1
+kind: Tagger
+metadata:
+  name: tagger-worker
+spec:
+# Add this label to every pod!
+  key: mytag
+  label: nexttag
+  replicas: 1
